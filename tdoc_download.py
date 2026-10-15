@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""T0 — 3GPP TDoc 下载工具 (最终版)
+"""T0 — 3GPP TDoc 下载工具 (v2)
+
+独立包成员之一(与 tdoc_extract.py / tdoc_direct.py / tdoc_gui.pyw 同目录)。
+★ 按号直下(只知道 TDoc 号 / 规范号时直接下载)见同目录 tdoc_direct.py, 本脚本不含该能力。
 
 两用工具, 由 GUI(tdoc_gui.pyw) 或命令行调用:
   用法1 基于 TDoc 清单下载 + 解压 + 按 agenda 嵌套分类(一步到位, 默认输出 by_agenda/ 树);

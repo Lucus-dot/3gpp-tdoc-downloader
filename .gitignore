@@ -1,17 +1,33 @@
 # ---------------------------------------------------------------------------
 # 运行产物 —— 含会议清单 / 提案原文 / 下载日志，切勿提交到公开仓库
 # ---------------------------------------------------------------------------
+# T0 下载+分类
 by_agenda/
 extracted/
 tdoc_index.json
 tdoclist_for_T1.csv
 _download_log.csv
 _failures.csv
-*.log
+# 按号直下（tdoc_direct.py）
+by_tdoc/
+specs/
+direct_index.json
+_direct_log.csv
+# 输出目录默认名
+Docs/
+# 索引缓存（会议表 / 规范版本列表，tdoc_direct.py）
+.tdoc_cache/
+
+# 清单 / 提案原件 / 压缩包
 *.xlsx
 *.xlsm
 *.xls
 *.zip
+
+# 本地配置与日志（可能含本机路径）
+*.log
+*.env
+!*.env.example
 
 # ---------------------------------------------------------------------------
 # Python

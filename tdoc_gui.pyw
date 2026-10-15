@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""T0 图形界面 (最终版 v3)。
+"""3GPP TDoc 图形界面 (v4)。
 
-双击本文件打开窗口。零第三方依赖(纯 tkinter)。
-只调用同目录的 tdoc_download.py(唯一 T0 实现)。
+双击本文件打开窗口。零第三方依赖(纯 tkinter)。只调用同目录的:
+  - tdoc_download.py  (T0: 按清单下载+解压+按 agenda 分类)
+  - tdoc_direct.py    (按号直下: TDoc / TS / TR 直接下载)
 
-v3 相对 v2:
-  ★ **会议自动推荐**: 选好 TDoc 清单(.xlsx)后, 从**文件名**推断 组别+会议号
-     (如 TDoc_List_Meeting_RAN1#126-bis.xlsx -> RAN1 / 126-bis), 自动填好并联网核对出候选。
-     文件名里没有会议信息时**不做任何猜测**, 只提示你手动填。
-  ★ "保留原始 zip 与 extracted" 的文案改准: 不勾选=**已成功分类的**只留 by_agenda 一份,
-     未成功分类的原件会保留下来便于排查(旧版是"有一个没成功就全都不删", 与承诺不符, 已修)。
-  ★ summary 弹窗直接列出未取得明细(TDoc号 / agenda / 原因), 并指向 _failures.csv。
-  ★ agenda 支持多个(逗号分隔)。
+v4 相对 v3:
+  ★ **新增模式③「按号直下」**: 直接填 TDoc 号(R1-2607107)或规范号(38.211), 不用清单、不用自己找会议目录。
+    - 「指定会议」输入框 + 「前后 ±N」: 在指定会议附近 ±N 个目录内搜(对应 tdoc_direct 的 --meeting/--radius);
+    - **候选会议列表**: 点「检索候选会议」按号码接近度联网列出候选, 或一次运行后**自动填充**未命中候选,
+      双击即可把该会议填进「指定会议」框(可再「运行」);
+    - 「只定位不下载」勾选框 = --dry-run(先看定位对不对, 再决定下载)。
+  ★ 完成弹窗兼容两种汇总口径: T0 的「有效/仍失败」与 tdoc_direct 的「成功/未取得」。
 
-其余: 后台线程(不卡死) + 停止 + UTF-8(不乱码) + 日志落盘 + tkinter 自动切换解释器。
+其余(沿用 v3): 会议自动推荐、后台线程不卡死、停止、UTF-8 不乱码、日志落盘、tkinter 自动切换解释器。
 """
 
 import os
@@ -73,6 +73,7 @@ from tkinter import filedialog, messagebox, scrolledtext
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 T0 = os.path.join(TOOLS_DIR, "tdoc_download.py")
+TD = os.path.join(TOOLS_DIR, "tdoc_direct.py")
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
@@ -91,38 +92,51 @@ except Exception:
     def _recommend(path):
         return None, None
 
+# 复用 tdoc_direct 的会议表/候选函数(供模式③「检索候选会议」)
+try:
+    import tdoc_direct as _TD
+    _td_norm = _TD.norm_tdoc_input
+    _td_code = _TD.tdoc_code
+    _td_num = _TD.tdoc_num
+    _td_table = _TD.load_meeting_table
+    _td_suggest = _TD.suggest_meetings
+except Exception:
+    _TD = None
+    _td_norm = _td_code = _td_num = _td_table = _td_suggest = None
+
 HINTS_UI = """【会议目录命名实例 · 实测 3GPP 真实目录, 组别决定子目录】
   RAN1  126      -> tsg_ran/WG1_RL1/TSGR1_126        RAN1  126-bis -> tsg_ran/WG1_RL1/TSGR1_126b     ★小写 b
   RAN2  91-bis   -> tsg_ran/WG2_RL2/TSGR2_91bis      RAN3  91-bis  -> tsg_ran/WG3_Iu/TSGR3_91bis      ★全拼 bis
   RAN4  94-bis   -> tsg_ran/WG4_Radio/TSGR4_94Bis    ★大写 Bis
   全会 RAN  113  -> tsg_ran/TSG_RAN/TSGR_113         SA  99        -> tsg_sa/TSG_SA/TSGS_99_Rotterdam_2023_03
-【后缀各组不统一: b / bis / Bis / _e / 城市名】=> 请点「生成候选 URL」联网核对, 或直接粘贴浏览器里的 Docs 地址。"""
+【模式③「按号直下」不需要关心目录名 —— 它从 3GPP 官方会议表里「查」会议, 不拼 URL。】"""
 
 root = tk.Tk()
-root.title("3GPP TDoc 下载/分类 (最终版 v3 · 按文件名推荐会议 · 不卡死)")
-root.geometry("920x820")
+root.title("3GPP TDoc 下载 / 分类 / 按号直下 (v4)")
+root.geometry("960x1000")
 
 # ---- 模式 ----
-var_mode = tk.StringVar(value="A")   # A=下载+分类  B=仅分类
+var_mode = tk.StringVar(value="A")   # A=下载+分类  B=仅分类  C=按号直下
 tk.Label(root, text="模式:").grid(row=0, column=0, sticky="e", padx=4, pady=4)
 tk.Radiobutton(root, text="① 基于清单下载+分类", variable=var_mode, value="A").grid(row=0, column=1, sticky="w")
 tk.Radiobutton(root, text="② 仅分类(已有包)", variable=var_mode, value="B").grid(row=0, column=2, sticky="w")
+tk.Radiobutton(root, text="③ 按号直下(TDoc/规范号)", variable=var_mode, value="C").grid(row=0, column=3, sticky="w")
 
 # ---- TDoc 清单 ----
 tk.Label(root, text="TDoc 清单(xlsx/csv/zip):").grid(row=1, column=0, sticky="e", padx=4, pady=4)
-e_tdoc = tk.Entry(root, width=74)
+e_tdoc = tk.Entry(root, width=76)
 e_tdoc.grid(row=1, column=1, columnspan=2, sticky="we", padx=4)
 tk.Button(root, text="浏览", command=lambda: on_browse_tdoc()).grid(row=1, column=3, padx=4)
 
 # ---- 待分类包目录(仅分类模式) ----
 tk.Label(root, text="待分类包目录(仅②):").grid(row=2, column=0, sticky="e", padx=4, pady=4)
-e_pkg = tk.Entry(root, width=74)
+e_pkg = tk.Entry(root, width=76)
 e_pkg.grid(row=2, column=1, columnspan=2, sticky="we", padx=4)
 tk.Button(root, text="浏览", command=lambda: browse_dir(e_pkg, "选择待分类文件夹")).grid(row=2, column=3, padx=4)
 
 # ---- Docs 目录 URL(优先) ----
 tk.Label(root, text="Docs 目录 URL(最高优先):").grid(row=3, column=0, sticky="e", padx=4, pady=4)
-e_base = tk.Entry(root, width=74)
+e_base = tk.Entry(root, width=76)
 e_base.grid(row=3, column=1, columnspan=2, sticky="we", padx=4)
 tk.Label(root, text="↑ 可直接粘贴浏览器里打开的 Docs 地址; 或留空, 用下面两行自动生成",
          fg="#555").grid(row=4, column=1, columnspan=3, sticky="w")
@@ -145,42 +159,78 @@ _lb = tk.Listbox(root, height=4, font=("Consolas", 9))
 _lb.grid(row=7, column=0, columnspan=4, sticky="we", padx=8, pady=2)
 _cands = []
 
+# ======================= 按号直下 (模式③) =======================
+tk.Label(root, text="── 按号直下 · 仅模式③使用 ──────────────────────────────",
+         fg="#0a5", anchor="w").grid(row=8, column=0, columnspan=4, sticky="we", padx=6, pady=(8, 2))
+
+tk.Label(root, text="TDoc / 规范号(可多个):").grid(row=9, column=0, sticky="e", padx=4, pady=4)
+e_dnum = tk.Entry(root, width=76)
+e_dnum.grid(row=9, column=1, columnspan=2, sticky="we", padx=4)
+tk.Label(root, text="如 R1-2607107, RP-261575, 38.211", fg="#555").grid(row=9, column=3, sticky="w")
+
+tk.Label(root, text="指定会议(可选):").grid(row=10, column=0, sticky="e", padx=4, pady=4)
+e_meet = tk.Entry(root, width=26)
+e_meet.grid(row=10, column=1, sticky="w", padx=4)
+tk.Label(root, text="前后 ±").grid(row=10, column=2, sticky="e", padx=4)
+_fr = tk.Frame(root)
+_fr.grid(row=10, column=3, sticky="w")
+e_radius = tk.Entry(_fr, width=5)
+e_radius.insert(0, "5")
+e_radius.pack(side="left")
+t_btn_sug = tk.Button(_fr, text="检索候选会议", bg="#d8f0d8")
+t_btn_sug.pack(side="left", padx=6)
+tk.Label(root, text="「指定会议」填目录名(R1-126-bis / TSGR1_126b)或会议号; 留空则自动查表; "
+                    "下方候选可双击填入",
+         fg="#555").grid(row=11, column=0, columnspan=4, sticky="w", padx=8)
+
+_mlb = tk.Listbox(root, height=4, font=("Consolas", 9))
+_mlb.grid(row=12, column=0, columnspan=4, sticky="we", padx=8, pady=2)
+_mcands = []
+
 # ---- 输出目录 ----
-tk.Label(root, text="输出目录:").grid(row=8, column=0, sticky="e", padx=4, pady=4)
-e_out = tk.Entry(root, width=74)
-e_out.grid(row=8, column=1, columnspan=2, sticky="we", padx=4)
-tk.Button(root, text="浏览", command=lambda: browse_dir(e_out, "选择输出目录")).grid(row=8, column=3, padx=4)
+tk.Label(root, text="输出目录:").grid(row=13, column=0, sticky="e", padx=4, pady=4)
+e_out = tk.Entry(root, width=76)
+e_out.grid(row=13, column=1, columnspan=2, sticky="we", padx=4)
+tk.Button(root, text="浏览", command=lambda: browse_dir(e_out, "选择输出目录")).grid(row=13, column=3, padx=4)
 
 # ---- agenda 过滤(支持多个) ----
-tk.Label(root, text="agenda 过滤(可选):").grid(row=9, column=0, sticky="e", padx=4, pady=4)
+tk.Label(root, text="agenda 过滤(可选):").grid(row=14, column=0, sticky="e", padx=4, pady=4)
 e_agenda = tk.Entry(root, width=30)
-e_agenda.grid(row=9, column=1, sticky="w", padx=4)
-tk.Label(root, text="(可多个, 逗号分隔, 如 10.7,9.1; 10.7 含其下全部)", fg="#555").grid(row=9, column=2, columnspan=2, sticky="w")
+e_agenda.grid(row=14, column=1, sticky="w", padx=4)
+tk.Label(root, text="(可多个, 逗号分隔, 如 10.7,9.1; 10.7 含其下全部)", fg="#555").grid(row=14, column=2, columnspan=2, sticky="w")
 
-# ---- 保留原始 zip ----
+# ---- 保留原始 zip / 只定位 / 刷新索引缓存 ----
+_fr2 = tk.Frame(root)
+_fr2.grid(row=15, column=1, columnspan=3, sticky="w", padx=4, pady=2)
 var_keepraw = tk.BooleanVar(value=False)
-tk.Checkbutton(root, text="保留原始 zip 与 extracted（不勾选 = 已成功分类的只留 by_agenda 一份；"
-                          "未成功分类的原件会保留便于排查）",
-               variable=var_keepraw).grid(row=10, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+tk.Checkbutton(_fr2, text="保留原始 zip 与 extracted（不勾选 = 已成功分类的只留 by_agenda 一份）",
+               variable=var_keepraw).pack(side="left")
+var_dry = tk.BooleanVar(value=False)
+tk.Checkbutton(_fr2, text="只定位不下载（模式③ --dry-run）",
+               variable=var_dry).pack(side="left", padx=16)
+var_refresh = tk.BooleanVar(value=False)
+tk.Checkbutton(_fr2, text="刷新索引缓存（模式③ --refresh-cache）",
+               variable=var_refresh).pack(side="left", padx=16)
 
 # ---- 运行 / 停止 / 退出 ----
 btn_run = tk.Button(root, text="运行", bg="#cfe8ff")
-btn_run.grid(row=11, column=1, sticky="w", padx=4, pady=6)
+btn_run.grid(row=16, column=1, sticky="w", padx=4, pady=6)
 btn_stop = tk.Button(root, text="停止", state="disabled")
-btn_stop.grid(row=11, column=2, sticky="w", padx=4, pady=6)
-tk.Button(root, text="退出", command=root.destroy).grid(row=11, column=3, sticky="w", padx=4, pady=6)
+btn_stop.grid(row=16, column=2, sticky="w", padx=4, pady=6)
+tk.Button(root, text="退出", command=root.destroy).grid(row=16, column=3, sticky="w", padx=4, pady=6)
 
 # ---- 日志 ----
-log = scrolledtext.ScrolledText(root, width=116, height=13)
-log.grid(row=12, column=0, columnspan=4, sticky="we", padx=6, pady=6)
+log = scrolledtext.ScrolledText(root, width=120, height=12)
+log.grid(row=17, column=0, columnspan=4, sticky="we", padx=6, pady=6)
 
 # ---- 命名实例(常驻显示) ----
 tk.Label(root, text=HINTS_UI, justify="left", anchor="w", fg="#234",
-         bg="#f4f8ff", font=("SimSun", 9)).grid(row=13, column=0, columnspan=4, sticky="we", padx=6, pady=(0, 8))
+         bg="#f4f8ff", font=("SimSun", 9)).grid(row=18, column=0, columnspan=4, sticky="we", padx=6, pady=(0, 8))
 
 # ---- 运行态 ----
 _q = queue.Queue()      # 下载子进程输出
-_rq = queue.Queue()     # 联网解析候选
+_rq = queue.Queue()     # 联网解析候选(URL)
+_mrq = queue.Queue()    # 联网检索候选会议(按号直下)
 _state = {"proc": None, "running": False, "logfile": None, "buf": [], "last_rec": None}
 
 
@@ -332,7 +382,80 @@ def on_lb_double(event=None):
     on_pick()
 
 
-# ======================= 运行 T0 =======================
+# ======================= 模式③: 检索候选会议 =======================
+def on_suggest_meetings():
+    """按号码接近度联网列出候选会议(供「指定会议」自动填充)。"""
+    nums = e_dnum.get().strip()
+    if not nums:
+        messagebox.showerror("缺参数", "请先填 TDoc 号, 如 R1-2607107")
+        return
+    if _TD is None or _td_table is None:
+        messagebox.showerror("不可用", "未能加载 tdoc_direct.py 的会议表函数, 请改用手动填会议名。")
+        return
+    first = re.split(r"[,;，、\s]+", nums)[0].strip()
+    t_btn_sug.config(state="disabled")
+    _emit(f"\n[界面] 检索候选会议: {first} …\n")
+    threading.Thread(target=_suggest_worker, args=(first,), daemon=True).start()
+    root.after(150, _poll_suggest)
+
+
+def _suggest_worker(first):
+    try:
+        tdoc = _td_norm(first)
+        code, digits = _td_code(tdoc), _td_num(tdoc)
+        info = _td_table(code)
+        if not info.get("ok"):
+            _mrq.put(("err", "前缀 %s 无会议表(status=%s)" % (code, info.get("status"))))
+            return
+        if digits is None:
+            _mrq.put(("err", "无法从 %s 解析出号码" % first))
+            return
+        sug = _td_suggest(info["rows"], digits, 8)
+        _mrq.put(("cands", (code, digits, sug)))
+    except Exception as e:
+        _mrq.put(("err", str(e)))
+
+
+def _poll_suggest():
+    try:
+        kind, payload = _mrq.get_nowait()
+    except queue.Empty:
+        root.after(150, _poll_suggest)
+        return
+    t_btn_sug.config(state="normal")
+    if kind == "err":
+        _emit(f"[界面] 检索失败: {payload}\n")
+        messagebox.showerror("检索失败", f"{payload}\n\n可直接手动填「指定会议」。")
+        return
+    code, digits, sug = payload
+    _fill_meeting_candidates(sug)
+    _emit(f"[界面] 前缀 {code} / 号码 {digits}: 候选会议 {len(sug)} 个"
+          f"(按号码接近度; 双击可填入「指定会议」)\n")
+
+
+def _fill_meeting_candidates(sug):
+    _mlb.delete(0, tk.END)
+    _mcands.clear()
+    for r in sug:
+        lab = r.get("label") or "?"
+        dirn = (r.get("fpath") or "").split("/")[-1]
+        _mlb.insert(tk.END, "%-14s %-11s %s" % (lab, r.get("date") or "?", dirn))
+        _mcands.append(lab if lab and lab != "?" else dirn)
+    if _mcands:
+        _mlb.selection_clear(0, tk.END)
+
+
+def on_meet_double(event=None):
+    sel = _mlb.curselection()
+    if not sel:
+        return
+    v = _mcands[sel[0]]
+    e_meet.delete(0, tk.END)
+    e_meet.insert(0, v)
+    _emit(f"[界面] 「指定会议」已填入: {v}(点『运行』即在前后 ±{e_radius.get() or '5'} 个目录内搜)\n")
+
+
+# ======================= 运行 =======================
 def _worker(cmd):
     try:
         env = dict(os.environ)
@@ -385,6 +508,37 @@ def _read_failures(out_dir, limit=12):
     return rows, fp
 
 
+def _read_direct_log(out_dir, limit=12):
+    """从 _direct_log.csv 读出未取得明细(按号直下)。"""
+    fp = os.path.join(out_dir, "_direct_log.csv")
+    rows = []
+    try:
+        with open(fp, encoding="utf-8-sig", newline="") as f:
+            for i, r in enumerate(csv.DictReader(f)):
+                if (r.get("status") or "") in ("ok", "planned"):
+                    continue
+                if len(rows) >= limit:
+                    break
+                rows.append("  {x:<16} [{st}] {note}".format(
+                    x=(r.get("input") or "")[:16],
+                    st=r.get("status") or "",
+                    note=(r.get("note") or r.get("locate") or "")[:40]))
+    except Exception:
+        pass
+    return rows, fp
+
+
+def _parse_suggest_from_text(text):
+    """从日志里抓「候选会议」行, 返回 [(label, date, dirname)]。
+    第 2 段必须是 YYYY-MM-DD 日期 —— 以此排除 DONE 汇总里的失败明细行。"""
+    out = []
+    for ln in text.splitlines():
+        m = re.match(r"^\s*-\s+(\S+)\s+(\d{4}-\d{2}-\d{2})\s+(\S+)\s*$", ln)
+        if m:
+            out.append((m.group(1), m.group(2), m.group(3)))
+    return out
+
+
 def _finish(rc, err=None):
     _state["running"] = False
     _state["proc"] = None
@@ -394,6 +548,7 @@ def _finish(rc, err=None):
     log.insert(tk.END, f"\n=== 退出码: {rc} ===\n")
     out_dir = _state.get("out", "")
     log_path = _state.get("log_path", "")
+    mode = _state.get("mode", "A")
     lf = _state["logfile"]
     if lf:
         try:
@@ -406,10 +561,12 @@ def _finish(rc, err=None):
         messagebox.showerror("错误", err)
         return
 
-    # ---- 精确判定: 退出码 + T0 的 DONE 统计(不要用"文本里有没有'失败'两字") ----
+    # ---- 精确判定: 退出码 + 子工具的 DONE 统计(不要用"文本里有没有'失败'两字") ----
+    #      T0:      总= / 有效= / 仍失败=
+    #      按号直下: 总= / 成功= / 未取得=
     m_total = re.search(r"总=(\d+)", text)
-    m_valid = re.search(r"有效=(\d+)", text)
-    m_fail = re.search(r"仍失败=(\d+)", text)
+    m_valid = re.search(r"(?:有效|成功)=(\d+)", text)
+    m_fail = re.search(r"(?:仍失败|未取得)=(\d+)", text)
     m_reason = re.search(r"失败原因统计:\s*(.+)", text)
     total = int(m_total.group(1)) if m_total else None
     valid = int(m_valid.group(1)) if m_valid else None
@@ -419,29 +576,38 @@ def _finish(rc, err=None):
     if rc == 0:
         head = "✅ 运行完成(退出码 0)"
         if total is not None and valid is not None:
-            head += f"\n下载: 有效 {valid}/{total}"
+            head += f"\n获取: 成功 {valid}/{total}"
         if still:
             head += f"\n未取得: {still} 个" + (f"  ({reason})" if reason else "")
-            rows, fp = _read_failures(out_dir)
+            rows, fp = (_read_direct_log(out_dir) if mode == "C" else _read_failures(out_dir))
             if rows:
-                head += "\n\n未取得明细(TDoc / agenda / 原因):\n" + "\n".join(rows)
+                head += "\n\n未取得明细:\n" + "\n".join(rows)
             head += ("\n\n→ 多为 403/404: 该文件在 3GPP 侧不公开或不存在, **不影响其余文件**, "
                      "不是脚本出错。")
             if rows:
-                head += f"\n完整明细(含标题/来源/URL): {fp}"
+                head += f"\n完整明细: {fp}"
+            # 模式③: 把候选会议自动填进候选列表, 双击即可重试
+            if mode == "C":
+                sug = _parse_suggest_from_text(text)
+                if sug:
+                    _fill_meeting_candidates(
+                        [{"label": a, "date": b, "fpath": "x/" + c} for a, b, c in sug])
+                    head += "\n\n已在下方列出候选会议 —— 双击某行填入「指定会议」后, 再点『运行』。"
         else:
             head += "\n全部文件均已取得。"
         head += f"\n\n输出目录:\n{os.path.abspath(out_dir)}\n日志: {log_path}"
         messagebox.showinfo("完成", head)
     else:
+        hint = ("• Docs 目录 URL 不对 —— 点「生成候选 URL(联网核对)」可避免;\n"
+                "• 网络不可达 / 代理问题;\n"
+                "• 整个会议文档尚未公开(预检会在几秒内直接停止)。")
+        if mode == "C":
+            hint = ("• TDoc / 规范号写法不对(如 R1-2607107 / 38.211);\n"
+                    "• 会议表里没找到该号 —— 用「检索候选会议」或直接填「指定会议」;\n"
+                    "• 网络不可达 / 代理问题。")
         messagebox.showwarning(
             "运行未完成",
-            f"脚本退出码 {rc}(非 0, 属真实错误)。\n日志:\n{log_path}\n\n"
-            "常见原因:\n"
-            "• Docs 目录 URL 不对 —— 点「生成候选 URL(联网核对)」可避免;\n"
-            "• 网络不可达 / 代理问题;\n"
-            "• 整个会议文档尚未公开(预检会在几秒内直接停止)。\n\n"
-            "可把 tdoc_gui_run.log 的内容贴给我, 我帮你精确定位。")
+            f"脚本退出码 {rc}(非 0, 属真实错误)。\n日志:\n{log_path}\n\n常见原因:\n" + hint)
 
 
 def on_run():
@@ -456,40 +622,71 @@ def on_run():
     keep_raw = var_keepraw.get()
     tsg = var_tsg.get().strip()
 
-    if not os.path.isfile(T0):
-        messagebox.showerror("缺文件", f"找不到 T0 脚本:\n{T0}")
-        return
     if not out:
         messagebox.showerror("缺参数", "请填写输出目录")
         return
 
-    cmd = [sys.executable, T0]
-    if mode == "B":
+    # ---------- 模式③: 按号直下 ----------
+    if mode == "C":
+        if not os.path.isfile(TD):
+            messagebox.showerror("缺文件", f"找不到 tdoc_direct.py:\n{TD}")
+            return
+        nums = e_dnum.get().strip()
+        if not nums:
+            messagebox.showerror("缺参数", "请填写 TDoc / 规范号, 如 R1-2607107 或 38.211")
+            return
+        cmd = [sys.executable, TD, "--direct", nums, "--out", out]
+        meet = e_meet.get().strip()
+        if meet:
+            cmd += ["--meeting", meet]
+        r = e_radius.get().strip()
+        if r:
+            try:
+                cmd += ["--radius", str(int(r))]
+            except ValueError:
+                messagebox.showerror("参数错", "「前后 ±」必须是整数")
+                return
+        if var_dry.get():
+            cmd += ["--dry-run"]
+        if var_refresh.get():
+            cmd += ["--refresh-cache"]
+    # ---------- 模式②: 仅分类 ----------
+    elif mode == "B":
+        if not os.path.isfile(T0):
+            messagebox.showerror("缺文件", f"找不到 T0 脚本:\n{T0}")
+            return
         if not package or not tdoclist:
             messagebox.showerror("缺参数", "仅分类模式需要: 待分类包目录 + TDoc 清单")
             return
-        cmd += ["--classify", "--package", package, "--from-tdoclist", tdoclist]
+        cmd = [sys.executable, T0, "--classify", "--package", package,
+               "--from-tdoclist", tdoclist, "--out", out]
+        if agenda:
+            cmd += ["--agenda", agenda]
+    # ---------- 模式①: 下载+分类 ----------
     else:
+        if not os.path.isfile(T0):
+            messagebox.showerror("缺文件", f"找不到 T0 脚本:\n{T0}")
+            return
         if not tdoclist:
             messagebox.showerror("缺参数", "请填写 TDoc 清单(xlsx/csv/zip)")
             return
         if base_url:
-            cmd += ["--from-tdoclist", tdoclist, "--base", base_url]
+            cmd = [sys.executable, T0, "--from-tdoclist", tdoclist, "--base", base_url, "--out", out]
         else:
             messagebox.showerror(
                 "缺参数",
                 "请先点「生成候选 URL(联网核对)」并选中候选(会自动填入 URL), "
                 "或直接粘贴 Docs 目录 URL。")
             return
-    cmd += ["--out", out]
-    if agenda:
-        cmd += ["--agenda", agenda]
-    if keep_raw:
-        cmd += ["--keep-raw"]
+        if agenda:
+            cmd += ["--agenda", agenda]
+        if keep_raw:
+            cmd += ["--keep-raw"]
 
     log.delete(1.0, tk.END)
     _state["buf"] = []
     _state["out"] = out
+    _state["mode"] = mode
     os.makedirs(out, exist_ok=True)
     log_path = os.path.join(out, "tdoc_gui_run.log")
     _state["log_path"] = log_path
@@ -520,7 +717,9 @@ btn_run.config(command=on_run)
 btn_stop.config(command=on_stop)
 btn_resolve.config(command=on_resolve)
 btn_pick.config(command=on_pick)
+t_btn_sug.config(command=on_suggest_meetings)
 _lb.bind("<Double-Button-1>", on_lb_double)
+_mlb.bind("<Double-Button-1>", on_meet_double)
 e_tdoc.bind("<FocusOut>", lambda ev: auto_recommend())
 
 root.mainloop()

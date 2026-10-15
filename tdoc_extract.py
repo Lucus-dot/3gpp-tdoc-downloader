@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""T1 — 3GPP TDoc 包抽取与按 agenda 分类工具 (rule-based, v1)
+"""T1 — 3GPP TDoc 包抽取与按 agenda 分类工具 (rule-based, v2)
+
+独立包成员之一(与 tdoc_download.py / tdoc_direct.py / tdoc_gui.pyw 同目录)。
+本身既是独立 CLI, 也被 tdoc_download.py import 复用其分类引擎。
 
 设计约定:
   - 只读取源 TDoc 包, 只在输出目录新建文件, 绝不修改/删除任何源文件或共享状态。
